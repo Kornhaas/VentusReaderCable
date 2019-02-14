@@ -61,7 +61,7 @@
 #define WITH_DEEPSLEEP 1      // 0 to disable deep sleep
 #define WITH_MQTT 1           // 0 to disable MQTT
 #define WITH_CONFIGINTERN 0   // 0 to set external WLAN/MQTT configs
-#define WITH_DEBUG 1          // 0 to disable debug output //TODO DEBUG_LEVEL
+#define WITH_DEBUG 0          // 0 to disable debug output //TODO DEBUG_LEVEL
 #define WITH_DEBUG_MQTT 0     // 0 to disable MQTT debug output 
 #define WITH_DEBUG_SENSORS 0  // 0 to disable Sensor debug output
 
@@ -82,7 +82,7 @@
 
 // others
 #define FIFOSIZE 8 // fifo buffer size
-#define SEALEVELPRESSURE_HPA (1013.25) // for BME280 to calculate approx. altitude
+#define SEALEVELPRESSURE_HPA (1013.25) // for BME280 to calculate approx. altitude //TODO correct value
 
 #if WITH_MQTT > 0
   /************************* WiFi Access Point ****************************/
@@ -608,7 +608,7 @@ void w132PublishResults(unsigned long value)
     {
       temp = -2048 + temp;
     }
-    data["temperature"] = temp / 10;
+    data["temperature"] = (float)temp / 10.0F;
 
     // Humidity (%)
     byte humidityOnes = (value >> 24 & 0b1111); // bit 24..27
@@ -627,14 +627,14 @@ void w132PublishResults(unsigned long value)
       data["wind_direction"] = (value >> 15 & 0b111111111); // bit 15..23
 
       // Wind Gust (m/s), bit 24..31
-      data["wind_gust"] = (value >> 24 & 0b11111111) / 5;
+      data["wind_gust"] = (float)(value >> 24 & 0b11111111) / 5;
 
       bitSet(ventusReceivedBits, W132_RECEIVED_WINDDIRGUST);
     }
     else
     {
       // Wind Speed (m/s), bit 24..31
-      data["wind_speed"] = (value >> 24 & 0b11111111) / 5;
+      data["wind_speed"] = (float)(value >> 24 & 0b11111111) / 5;
       
       bitSet(ventusReceivedBits, W132_RECEIVED_WINDSPEED);
     }
@@ -677,7 +677,7 @@ void w174PrintResults(unsigned long value)
   bool lowBattery = (value >> 8 & 0b1);    // bit 8 is set if battery voltage is low
 
   // Rain (mm)
-  float rain = (value >> 16 & 0b1111111111111111) * 0.25; // bits 16..31
+  float rain = (float)(value >> 16 & 0b1111111111111111) * 0.25; // bits 16..31
 
   bitSet(ventusReceivedBits, W174_RECEIVED_RAIN);
 
@@ -767,7 +767,7 @@ void bme280PrintResults()
 {
   #if (WITH_BME280 > 0 && WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
   
-  debugln("----------========= WITH_BME280 =========----------");
+  debugln("----------========= BME280 =========----------");
   debug("Temperature: ");
   debugln(bme.readTemperature());
   debug("Humidity: ");
