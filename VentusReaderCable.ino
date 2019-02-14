@@ -29,6 +29,9 @@
 #include <Adafruit_BME280.h>
 #include "config.h"
 
+// device Id
+#define DEVICEID "WeatherStation_1";
+
 // sensor connects
 #define W132_DATAPIN 5 // D1/GPIO5 connected data pin of W132 module
 #define W174_DATAPIN 4 // D2/GPIO4 connected data pin of W174 module
@@ -59,7 +62,7 @@
 #define WITH_MQTT 1           // 0 to disable MQTT
 #define WITH_CONFIGINTERN 0   // 0 to set external WLAN/MQTT configs
 #define WITH_DEBUG 1          // 0 to disable debug output //TODO DEBUG_LEVEL
-#define WITH_DEBUG_MQTT 1     // 0 to disable MQTT debug output 
+#define WITH_DEBUG_MQTT 0     // 0 to disable MQTT debug output 
 #define WITH_DEBUG_SENSORS 0  // 0 to disable Sensor debug output
 
 // debug functions
@@ -132,7 +135,7 @@ void setup()
 
   #if WITH_MQTT > 0
     client.setServer(MQTT_SERVER, MQTT_SERVERPORT);
-    client.setCallback(mqttCallback);
+    //client.setCallback(mqttCallback);
     wifiConnect();
   #endif
 
@@ -146,12 +149,16 @@ void setup()
       while (1);
     }
 
-    //forced mode, 1x temperature / 1x humidity / 1x pressure oversampling, filter off
+    // Weather Station Scenario
+    // forced mode, 1x temperature / 1x humidity / 1x pressure oversampling, filter off
     bme.setSampling(Adafruit_BME280::MODE_FORCED,
                     Adafruit_BME280::SAMPLING_X1, // temperature
                     Adafruit_BME280::SAMPLING_X1, // pressure
                     Adafruit_BME280::SAMPLING_X1, // humidity
                     Adafruit_BME280::FILTER_OFF);
+
+    // suggested rate is 1/60Hz (1m)
+    byte delayTime = 60000; // in milliseconds                    
   #endif
 
   // W132 and W174 weather sensors setup
@@ -366,7 +373,7 @@ boolean w174fifoAvailable()
 
 void w132PrintResults(unsigned long value)
 {
-  #if WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0
+  #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
   debugln("----------========== W132 ==========----------");
 
   debug("Telegram: ");
@@ -477,7 +484,7 @@ void w132PrintResults(unsigned long value)
     }
   }
 
-  debugln("");
+  debugln();
   #endif
 }
 
@@ -569,19 +576,21 @@ void w132PublishResults(unsigned long value)
   id["type"] = "sensor";
   id["id"] = 1;
   id["name"] = "W132";
-  id["position"] = "Arbeitszimmer";
+  id["position"] = "Garden";
 
   // Add sensor datas
   JsonObject &data = root.createNestedObject("data");
   data["trigger"] = (value >> 11 & 0b1);
   data["battery_low"] = (value >> 8 & 0b1);
+  /*
   data["temperature"] = "n/a";
   data["temperature_trend"] = "n/a";
   data["humidity"] = "n/a";
   data["wind_speed"] = "n/a";
   data["wind_direction"] = "n/a";
   data["wind_gust"] = "n/a";
-
+  */
+  
   // Temperature Trend
   byte trend = (value >> 9 & 0b11); // bit 9, 10
 
@@ -599,7 +608,7 @@ void w132PublishResults(unsigned long value)
     {
       temp = -2048 + temp;
     }
-    data["temperature"] = temp;
+    data["temperature"] = temp / 10;
 
     // Humidity (%)
     byte humidityOnes = (value >> 24 & 0b1111); // bit 24..27
@@ -618,14 +627,14 @@ void w132PublishResults(unsigned long value)
       data["wind_direction"] = (value >> 15 & 0b111111111); // bit 15..23
 
       // Wind Gust (m/s), bit 24..31
-      data["wind_gust"] = (value >> 24 & 0b11111111);
+      data["wind_gust"] = (value >> 24 & 0b11111111) / 5;
 
       bitSet(ventusReceivedBits, W132_RECEIVED_WINDDIRGUST);
     }
     else
     {
       // Wind Speed (m/s), bit 24..31
-      data["wind_speed"] = (value >> 24 & 0b11111111);
+      data["wind_speed"] = (value >> 24 & 0b11111111) / 5;
       
       bitSet(ventusReceivedBits, W132_RECEIVED_WINDSPEED);
     }
@@ -633,25 +642,33 @@ void w132PublishResults(unsigned long value)
 
   char publishJson[256];
   root.printTo(publishJson);
+  
+  #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
   debug("MQTT topic: ");
   debugln(sensorTopic);
   debug("MQTT publish: ");
   debugln(publishJson);
+  #endif
+  
   if(client.publish(sensorTopic, (const char*)publishJson), true)
-  //if(client.publish(sensorTopic, "Sensor W132"))
   {
+    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
     debugln("MQTT published.");
+    #endif
   }
   else
   {
+    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0) 
     debugln("MQTT publishing failed!");
+    #endif
   }
+  
   #endif
 }
 
 void w174PrintResults(unsigned long value)
 {
-  #if WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0
+  #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
   
   // Valid Values
   byte w174ResultCode = 0;
@@ -711,30 +728,36 @@ void w174PublishResults(unsigned long value)
   id["type"] = "sensor";
   id["id"] = 2;
   id["name"] = "W174";
-  id["position"] = "Arbeitszimmer";
+  id["position"] = "Garden";
 
   // Add sensor datas
   JsonObject &data = root.createNestedObject("data");
   data["battery_low"] = (value >> 8 & 0b1);
-  data["rain"] = (value >> 16 & 0b1111111111111111); // bits 16..31
+  data["rain"] = (value >> 16 & 0b1111111111111111) * 0.25; // bits 16..31
 
   bitSet(ventusReceivedBits, W174_RECEIVED_RAIN);
 
-  //root.printTo(Serial);
   char publishJson[256];
   root.printTo(publishJson);
+  
+  #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
   debug("MQTT topic: ");
   debugln(sensorTopic);
   debug("MQTT publish: ");
   debugln(publishJson);
+  #endif
+  
   if(client.publish(sensorTopic, (const char*)publishJson), true)
-  //if(client.publish(sensorTopic, "Sensor W174"))
   {
+    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
     debugln("MQTT published.");
+    #endif
   }
   else
   {
+    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
     debugln("MQTT publishing failed!");
+    #endif
   }
 
   #endif
@@ -742,7 +765,7 @@ void w174PublishResults(unsigned long value)
 
 void bme280PrintResults()
 {
-  #if WITH_BME280 > 0 && WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0
+  #if (WITH_BME280 > 0 && WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
   
   debugln("----------========= WITH_BME280 =========----------");
   debug("Temperature: ");
@@ -762,7 +785,7 @@ void bme280PrintResults()
 
 void bme280PublishResults()
 {
-  #if WITH_MQTT > 0 &&  WITH_BME280 > 0
+  #if( WITH_MQTT > 0 &&  WITH_BME280 > 0)
   
   // Create JsonBuffer
   const int capacity = JSON_OBJECT_SIZE(100);
@@ -776,29 +799,36 @@ void bme280PublishResults()
   id["type"] = "sensor";
   id["id"] = 3;
   id["name"] = "BME280";
-  id["position"] = "Arbeitszimmer";
+  id["position"] = "Garden";
 
   // Add sensor datas
   JsonObject &data = root.createNestedObject("data");
   data["temperature"] = bme.readTemperature();
   data["humidity"] = bme.readHumidity();
-  data["pressure"] = bme.readPressure();
-  data["altitude"] = bme.readAltitude(SEALEVELPRESSURE_HPA);
+  data["pressure"] = (bme.readPressure() / 100.0F);
+  data["approx_altitude"] = bme.readAltitude(SEALEVELPRESSURE_HPA);
 
   char publishJson[256];
   root.printTo(publishJson);
+  
+  #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
   debug("MQTT topic: ");
   debugln(sensorTopic);
   debug("MQTT publish: ");
   debugln(publishJson);
+  #endif
+  
   if(client.publish(sensorTopic, (const char*)publishJson), true)
-  //if(client.publish(sensorTopic, "Sensor BME"))
   {
+    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
     debugln("MQTT published.");
+    #endif
   }
   else
   {
+    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
     debugln("MQTT publishing failed!");
+    #endif
   }
 
   #endif
@@ -811,7 +841,9 @@ void wifiConnect()
   
   debug("Connecting to WiFi ");
   debug(WLAN_SSID);
-    
+
+  byte retries = 20;
+     
   WiFi.begin(WLAN_SSID, WLAN_PASSWORD);
   while (WiFi.status() != WL_CONNECTED)
   {
@@ -826,34 +858,6 @@ void wifiConnect()
   #endif  
 }
 
-// Function mqttCallback
-void mqttCallback(char* topic, byte* payload, unsigned int length)
-{
-  #if WITH_MQTT > 0 && WITH_DEBUG > 0 && WITH_MQTT_DEBUG > 0
-  
-  debug("Message arrived [");
-  debug(topic);
-  debugln("] ");
-
-  for (int i = 0; i < length; i++)
-  {
-    debug((char)payload[i]);
-  }
-  debugln();
-
-  // Switch on the LED if an 1 was received as first character
-  if ((char)payload[0] == '1')
-  {
-    debugln("success");
-  } 
-  else
-  {
-    debugln("failed");
-  }
-
-  #endif
-}
-
 // Function to connect and reconnect as necessary to the MQTT server.
 // Should be called in the loop function and it will take care if connecting.
 boolean mqttConnect()
@@ -861,32 +865,30 @@ boolean mqttConnect()
   #if WITH_MQTT > 0
 
   // Loop until we're reconnected
-  while (!client.connected()) {
-    if (WITH_DEBUG_MQTT > 0) debugln("Attempting MQTT connection...");
+  while (!client.connected())
+  {
+    #if (WITH_DEBUG_MQTT > 0)
+    debugln("Attempting MQTT connection...");
+    #endif
     
-    // Create a random client ID
-    String clientId = "ESP8266Client-" + String(random(0xffff), HEX);
+    // Connect with client ID
+    String clientId = DEVICEID;
 
     if (client.connect(clientId.c_str()))
     {
-      if (WITH_DEBUG_MQTT > 0) debugln("Broker Server connected");
-
-      // Once connected, publish an announcement...
-      client.publish("outTopic", "hello world");
-
-      // ... and resubscribe
-      client.subscribe("inTopic");
+      #if (WITH_DEBUG_MQTT > 0)
+      debugln("Broker connected");
+      #endif
     }
     else
     {
-      if (WITH_DEBUG_MQTT > 0)
-      {
-        debug("Broker Server connection failed, rc=");
-        debugln(client.state());
-        debugln(" try again in 5 seconds");
-      }
-      // Wait 5 seconds before retrying
-      delay(5000);
+      #if (WITH_DEBUG_MQTT > 0)
+      debug("Broker Server connection failed, rc=");
+      debugln(client.state());
+      debugln(" try again in 3 seconds");
+      #endif
+      // Wait 3 seconds before retrying
+      delay(3000);
     }
   }
   
@@ -897,25 +899,28 @@ boolean mqttConnect()
 
 void loop()
 {
+  #if WITH_MQTT > 0
+    mqttConnect();
+  #endif
+  
   if (w132fifoAvailable())
   {
     unsigned long dataReceived = w132fifoRead();
     if (dataReceived > 0)
     {
-      #if WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0
+      #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
         w132PrintResults(dataReceived);
       #endif  
 
       #if WITH_MQTT > 0
-        mqttConnect();
         w132PublishResults(dataReceived);  
       #endif
 
-      #if WITH_MQTT == 0 && (WITH_DEBUG == 0 || WITH_DEBUG_SENSORS == 0)
+      #if (WITH_MQTT == 0 && (WITH_DEBUG == 0 || WITH_DEBUG_SENSORS == 0))
         w132DecodeResults(dataReceived);  
       #endif
 
-      #if WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0
+      #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
         debug("Received Bits: ");
         for (byte i = 0; i < 4; i++)
         {
@@ -931,39 +936,36 @@ void loop()
         detachInterrupt(digitalPinToInterrupt(W174_DATAPIN)); // Interrupts off while sleeping
 
         #if WITH_BME280 > 0
-          #if WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0
+          #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
             bme280PrintResults();
           #endif
             
           #if WITH_MQTT > 0
-            mqttConnect();
             bme280PublishResults();
           #endif
         #endif 
 
         #if WITH_DEEPSLEEP > 0
+          // disconnect MQTT
+          debugln("disconnecting MQTT.");
+          client.disconnect();
+          delay(100);
+          
           // disconnect WiFi
           debugln("disconnecting WiFi.");
           WiFi.disconnect();
 
-          // disconnect MQTT
-          debugln("disconnecting MQTT.");
-          client.disconnect();
-          
           debug("deep sleeping ");
           debug(SLEEP_S);
           debugln(" seconds ...");
-          
+
           ESP.deepSleep(SLEEP_S * 1000000, WAKE_RF_DEFAULT); // xx secs.
-          delay(100);
         #else
           debug("delay ");
           debug(SLEEP_S);
           debugln(" seconds ...");
           delay(SLEEP_S * 1000);
           debugln("continue");
-          mqttConnect();
-          client.loop();
 
           attachInterrupt(digitalPinToInterrupt(W132_DATAPIN), w132Handler, CHANGE);
           attachInterrupt(digitalPinToInterrupt(W174_DATAPIN), w174Handler, CHANGE);
@@ -973,24 +975,29 @@ void loop()
   }
 
   // W174 is treated a bit carelessly, the values come with enough frequency in the period of W132
-  if (w174fifoAvailable())
+  if ((ventusReceivedBits >> W174_RECEIVED_RAIN & 0b1) != 1 && w174fifoAvailable())
   {
     unsigned long dataReceived = w174fifoRead();
     if (dataReceived > 0)
     {
-      #if WITH_DEBUG > 0
+      #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
         w174PrintResults(dataReceived);
-        #if WITH_MQTT > 0
-          mqttConnect();
-          w174PublishResults(dataReceived);  
-        #endif
-      #elif WITH_MQTT > 0
-        w174PublishResults(dataReceived);
-      #else
+      #endif  
+
+      #if WITH_MQTT > 0
+        w174PublishResults(dataReceived);  
+      #endif
+
+      #if (WITH_MQTT == 0 && (WITH_DEBUG == 0 || WITH_DEBUG_SENSORS == 0))
         w174DecodeResults(dataReceived);  
       #endif
 
-      #if WITH_DEBUG > 0
+      if ((ventusReceivedBits >> W174_RECEIVED_RAIN & 0b1) == 1)
+      {
+        detachInterrupt(digitalPinToInterrupt(W174_DATAPIN)); // Interrupts off while sleeping
+      }
+
+      #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
         debug("Received Bits: ");
         for (byte i = 0; i < 4; i++)
         {
