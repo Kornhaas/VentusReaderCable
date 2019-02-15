@@ -24,13 +24,7 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
-#include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BME280.h>
 #include "config.h"
-
-// device Id
-#define DEVICEID "WeatherStation_1";
 
 // sensor connects
 #define W132_DATAPIN 5 // D1/GPIO5 connected data pin of W132 module
@@ -57,12 +51,11 @@
 #define W174_RECEIVED_RAIN 3        // bit 3 is set = received rain
 
 // on/off 
-#define WITH_BME280 1         // 0 to disable WITH_BME280 sensor readout.
 #define WITH_DEEPSLEEP 1      // 0 to disable deep sleep
 #define WITH_MQTT 1           // 0 to disable MQTT
 #define WITH_CONFIGINTERN 0   // 0 to set external WLAN/MQTT configs
-#define WITH_DEBUG 0          // 0 to disable debug output //TODO DEBUG_LEVEL
-#define WITH_DEBUG_MQTT 0     // 0 to disable MQTT debug output 
+#define WITH_DEBUG 1          // 0 to disable debug output //TODO DEBUG_LEVEL
+#define WITH_DEBUG_MQTT 1     // 0 to disable MQTT debug output 
 #define WITH_DEBUG_SENSORS 0  // 0 to disable Sensor debug output
 
 // debug functions
@@ -82,7 +75,6 @@
 
 // others
 #define FIFOSIZE 8 // fifo buffer size
-#define SEALEVELPRESSURE_HPA (1013.25) // for BME280 to calculate approx. altitude //TODO correct value
 
 #if WITH_MQTT > 0
   /************************* WiFi Access Point ****************************/
@@ -102,10 +94,6 @@
   //changed in PubSubClient.h packed size from 128 to 320
   //MQTT_MAX_PACKET_SIZE 320
   
-  /************************* MQTT Feeds *********************************/
-  const char* sensorTopic = "/home/sensors";
-  const char* deviceTopic = "/home/devices"; //TODO
-  
   // ESP8266 WiFiClient class to connect to the MQTT server.
   WiFiClient WiFiClient;
   // or... use WiFiFlientSecure for SSL
@@ -113,11 +101,6 @@
   
   // MQTT client class
   PubSubClient client(WiFiClient);
-#endif
-
- // BEM280 sensor object with I2C protokol
-#if WITH_BME280 > 0
-  Adafruit_BME280 bme;
 #endif
 
 volatile long w132fifoBuf[FIFOSIZE]; // ring buffer
@@ -135,30 +118,7 @@ void setup()
 
   #if WITH_MQTT > 0
     client.setServer(MQTT_SERVER, MQTT_SERVERPORT);
-    //client.setCallback(mqttCallback);
     wifiConnect();
-  #endif
-
-  // WITH_BME280 sensor setup
-  #if WITH_BME280 > 0
-    Wire.begin(0, 2); // D3/GPIO0 connected to SDA, D4/GPIO2 connected to SCL on WITH_BME280 sensor
-    Wire.setClock(100000);
-    if (!bme.begin(0x76))
-    {
-      debugln("Could not find a valid WITH_BME280 sensor, check wiring!");
-      while (1);
-    }
-
-    // Weather Station Scenario
-    // forced mode, 1x temperature / 1x humidity / 1x pressure oversampling, filter off
-    bme.setSampling(Adafruit_BME280::MODE_FORCED,
-                    Adafruit_BME280::SAMPLING_X1, // temperature
-                    Adafruit_BME280::SAMPLING_X1, // pressure
-                    Adafruit_BME280::SAMPLING_X1, // humidity
-                    Adafruit_BME280::FILTER_OFF);
-
-    // suggested rate is 1/60Hz (1m)
-    byte delayTime = 60000; // in milliseconds                    
   #endif
 
   // W132 and W174 weather sensors setup
@@ -565,6 +525,9 @@ void w132PublishResults(unsigned long value)
 {
   #if WITH_MQTT > 0
 
+  // MQTT Feed
+  const char* sensorTopic = "weathersation/w132/out";
+
   const int capacity = JSON_OBJECT_SIZE(100);
   StaticJsonBuffer<capacity> jsonBuffer;
     
@@ -576,20 +539,11 @@ void w132PublishResults(unsigned long value)
   id["type"] = "sensor";
   id["id"] = 1;
   id["name"] = "W132";
-  id["position"] = "Garden";
 
   // Add sensor datas
   JsonObject &data = root.createNestedObject("data");
   data["trigger"] = (value >> 11 & 0b1);
   data["battery_low"] = (value >> 8 & 0b1);
-  /*
-  data["temperature"] = "n/a";
-  data["temperature_trend"] = "n/a";
-  data["humidity"] = "n/a";
-  data["wind_speed"] = "n/a";
-  data["wind_direction"] = "n/a";
-  data["wind_gust"] = "n/a";
-  */
   
   // Temperature Trend
   byte trend = (value >> 9 & 0b11); // bit 9, 10
@@ -716,6 +670,9 @@ void w174DecodeResults(unsigned long value)
 void w174PublishResults(unsigned long value)
 { 
   #if WITH_MQTT > 0
+  
+  // MQTT Feed
+  const char* sensorTopic = "weathersation/w174/out";
 
   const int capacity = JSON_OBJECT_SIZE(100);
   StaticJsonBuffer<capacity> jsonBuffer;
@@ -728,7 +685,6 @@ void w174PublishResults(unsigned long value)
   id["type"] = "sensor";
   id["id"] = 2;
   id["name"] = "W174";
-  id["position"] = "Garden";
 
   // Add sensor datas
   JsonObject &data = root.createNestedObject("data");
@@ -736,77 +692,6 @@ void w174PublishResults(unsigned long value)
   data["rain"] = (value >> 16 & 0b1111111111111111) * 0.25; // bits 16..31
 
   bitSet(ventusReceivedBits, W174_RECEIVED_RAIN);
-
-  char publishJson[256];
-  root.printTo(publishJson);
-  
-  #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
-  debug("MQTT topic: ");
-  debugln(sensorTopic);
-  debug("MQTT publish: ");
-  debugln(publishJson);
-  #endif
-  
-  if(client.publish(sensorTopic, (const char*)publishJson), true)
-  {
-    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
-    debugln("MQTT published.");
-    #endif
-  }
-  else
-  {
-    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
-    debugln("MQTT publishing failed!");
-    #endif
-  }
-
-  #endif
-}
-
-void bme280PrintResults()
-{
-  #if (WITH_BME280 > 0 && WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
-  
-  debugln("----------========= BME280 =========----------");
-  debug("Temperature: ");
-  debugln(bme.readTemperature());
-  debug("Humidity: ");
-  debugln(bme.readHumidity());
-  debug("Pressure: ");
-  debugln(bme.readPressure() / 100.0F);
-  debug("     RAW: ");
-  debugln(bme.readPressure());
-  debug("Approx. Altitude: ");
-  debugln(bme.readAltitude(SEALEVELPRESSURE_HPA));
-  debugln("");
-
-  #endif
-}
-
-void bme280PublishResults()
-{
-  #if( WITH_MQTT > 0 &&  WITH_BME280 > 0)
-  
-  // Create JsonBuffer
-  const int capacity = JSON_OBJECT_SIZE(100);
-  StaticJsonBuffer<capacity> jsonBuffer;
-  
-  // Create JsonObject
-  JsonObject &root = jsonBuffer.createObject();
-
-  // Add identification
-  JsonObject &id = root.createNestedObject("identification");
-  id["type"] = "sensor";
-  id["id"] = 3;
-  id["name"] = "BME280";
-  id["position"] = "Garden";
-
-  // Add sensor datas
-  JsonObject &data = root.createNestedObject("data");
-  data["temperature"] = bme.readTemperature();
-  data["humidity"] = bme.readHumidity();
-  data["pressure"] = (bme.readPressure() / 100.0F);
-  data["approx_altitude"] = bme.readAltitude(SEALEVELPRESSURE_HPA);
 
   char publishJson[256];
   root.printTo(publishJson);
@@ -872,12 +757,12 @@ boolean mqttConnect()
     #endif
     
     // Connect with client ID
-    String clientId = DEVICEID;
+    String clientId = "weatherstation";
 
     if (client.connect(clientId.c_str()))
     {
       #if (WITH_DEBUG_MQTT > 0)
-      debugln("Broker connected");
+      debugln("Broker connected.");
       #endif
     }
     else
@@ -934,16 +819,6 @@ void loop()
         ventusReceivedBits = 0;
         detachInterrupt(digitalPinToInterrupt(W132_DATAPIN)); // Interrupts off while sleeping
         detachInterrupt(digitalPinToInterrupt(W174_DATAPIN)); // Interrupts off while sleeping
-
-        #if WITH_BME280 > 0
-          #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
-            bme280PrintResults();
-          #endif
-            
-          #if WITH_MQTT > 0
-            bme280PublishResults();
-          #endif
-        #endif 
 
         #if WITH_DEEPSLEEP > 0
           // disconnect MQTT
