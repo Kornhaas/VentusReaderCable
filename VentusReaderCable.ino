@@ -1,4 +1,4 @@
-/*
+ /*
 
    VentusReaderCable
   
@@ -59,8 +59,8 @@
 #define WITH_DEBUG_SENSORS 0  // 0 to disable Sensor debug output
 
 // debug functions
-#if WITH_DEBUG > 0 || WITH_DEBUG_MQTT > 0 || WITH_DEBUG_SENSORS > 0
-  #define SERIALSPEED 74880 // Set speed of serial in Arduino IDE
+#if WITH_DEBUG > 0
+  #define SERIALSPEED 115200 // Set speed of serial in Arduino IDE
   #define debugStart(...) Serial.begin(__VA_ARGS__)   //debugStart is a macro, begin
   #define debug(...)      Serial.print(__VA_ARGS__)   //debug is a macro, debug print
   #define debugln(...)    Serial.println(__VA_ARGS__) //debugln is a macro, debug print print with LF
