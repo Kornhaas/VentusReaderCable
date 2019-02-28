@@ -21,11 +21,6 @@
    https://glsk.net/2018/02/battery-powered-weather-station-with-esp8266-and-bme280/
 
 */
-#include <ESP8266WiFi.h>
-#include <PubSubClient.h>
-#include <ArduinoJson.h>
-#include "config.h"
-
 // sensor connects
 #define W132_DATAPIN 5 // D1/GPIO5 connected data pin of W132 module
 #define W174_DATAPIN 4 // D2/GPIO4 connected data pin of W174 module
@@ -52,11 +47,8 @@
 
 // on/off 
 #define WITH_DEEPSLEEP 1      // 0 to disable deep sleep
-#define WITH_MQTT 1           // 0 to disable MQTT
-#define WITH_CONFIGINTERN 0   // 0 to set external WLAN/MQTT configs
 #define WITH_DEBUG 1          // 0 to disable debug output //TODO DEBUG_LEVEL
-#define WITH_DEBUG_MQTT 1     // 0 to disable MQTT debug output 
-#define WITH_DEBUG_SENSORS 0  // 0 to disable Sensor debug output
+#define WITH_DEBUG_SENSORS 1  // 0 to disable Sensor debug output
 
 // debug functions
 #if WITH_DEBUG > 0
@@ -71,37 +63,10 @@
 #endif
 
 // duration deep sleep/delay
-#define SLEEP_S 25  // xx secs. sleep
+#define SLEEP_S 29  // xx secs. sleep
 
 // others
 #define FIFOSIZE 8 // fifo buffer size
-
-#if WITH_MQTT > 0
-  /************************* WiFi Access Point ****************************/
-  #if WITH_CONFIGINTERN > 0 // if not defined in config.h
-  #define WLAN_SSID       "SSID"
-  #define WLAN_PASSWORD   "PASSWORD"
-  #endif
-  /************************* MQTT Server *********************************/
-
-  #if WITH_CONFIGINTERN > 0 // if not defined in config.h
-  #define MQTT_SERVER      "Broker IP or Hostname"
-  #define MQTT_SERVERPORT  1883                   // use 8883 for SSL
-  #define MQTT_USERNAME    "USERNAME"
-  #define MQTT_PASSWORD    "PASSWORD"
-  #endif
-  
-  //changed in PubSubClient.h packed size from 128 to 320
-  //MQTT_MAX_PACKET_SIZE 320
-  
-  // ESP8266 WiFiClient class to connect to the MQTT server.
-  WiFiClient WiFiClient;
-  // or... use WiFiFlientSecure for SSL
-  //WiFiClientSecure WiFiClient;
-  
-  // MQTT client class
-  PubSubClient client(WiFiClient);
-#endif
 
 volatile long w132fifoBuf[FIFOSIZE]; // ring buffer
 volatile byte w132fifoReadIndex, w132fifoWriteIndex;  // ring buffer read and write index W132
@@ -115,11 +80,6 @@ void setup()
 {
   debugStart(SERIALSPEED);
   debugln(F("Start receiving and decoding Ventus Weather Sensors via cable."));
-
-  #if WITH_MQTT > 0
-    client.setServer(MQTT_SERVER, MQTT_SERVERPORT);
-    wifiConnect();
-  #endif
 
   // W132 and W174 weather sensors setup
   pinMode(W132_DATAPIN, INPUT);
@@ -521,105 +481,6 @@ void w132DecodeResults(unsigned long value)
   }
 }
 
-void w132PublishResults(unsigned long value)
-{
-  #if WITH_MQTT > 0
-
-  // MQTT Feed
-  const char* sensorTopic = "weathersation/w132/out";
-
-  const int capacity = JSON_OBJECT_SIZE(100);
-  StaticJsonBuffer<capacity> jsonBuffer;
-    
-  // Create JsonObject
-  JsonObject &root = jsonBuffer.createObject();
-
-  // Add identification
-  JsonObject &id = root.createNestedObject("identification");
-  id["type"] = "sensor";
-  id["id"] = 1;
-  id["name"] = "W132";
-
-  // Add sensor datas
-  JsonObject &data = root.createNestedObject("data");
-  data["trigger"] = (value >> 11 & 0b1);
-  data["battery_low"] = (value >> 8 & 0b1);
-  
-  // Temperature Trend
-  byte trend = (value >> 9 & 0b11); // bit 9, 10
-
-  // if the Trend value is 3, then it's not a temperature message, but a wind message
-  if (trend != 3)
-  {
-    // Temperature Trend
-    data["temperature_trend"] = trend;
-    
-    // Temperature (C)
-    int temp = (value >> 12 & 0b11111111111); // bit 12..22
-
-    // sign bit 23
-    if ((value >> 23 & 0b1) == 1)
-    {
-      temp = -2048 + temp;
-    }
-    data["temperature"] = (float)temp / 10.0F;
-
-    // Humidity (%)
-    byte humidityOnes = (value >> 24 & 0b1111); // bit 24..27
-    byte humidityTens = (value >> 28 & 0b1111); // bit 28..31
-    data["humidity"] = (humidityTens * 10) + humidityOnes;
-
-    bitSet(ventusReceivedBits, W132_RECEIVED_TEMPHUM);
-  }
-  else
-  {
-    byte windType = (value >> 12 & 0b111); // bit 12..14, 111 = Wind Direction & Gust, otherwise Wind Speed
-
-    if (windType == 7)
-    {
-      // Wind Direction (grad)
-      data["wind_direction"] = (value >> 15 & 0b111111111); // bit 15..23
-
-      // Wind Gust (m/s), bit 24..31
-      data["wind_gust"] = (float)(value >> 24 & 0b11111111) / 5;
-
-      bitSet(ventusReceivedBits, W132_RECEIVED_WINDDIRGUST);
-    }
-    else
-    {
-      // Wind Speed (m/s), bit 24..31
-      data["wind_speed"] = (float)(value >> 24 & 0b11111111) / 5;
-      
-      bitSet(ventusReceivedBits, W132_RECEIVED_WINDSPEED);
-    }
-  }
-
-  char publishJson[256];
-  root.printTo(publishJson);
-  
-  #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
-  debug("MQTT topic: ");
-  debugln(sensorTopic);
-  debug("MQTT publish: ");
-  debugln(publishJson);
-  #endif
-  
-  if(client.publish(sensorTopic, (const char*)publishJson), true)
-  {
-    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
-    debugln("MQTT published.");
-    #endif
-  }
-  else
-  {
-    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0) 
-    debugln("MQTT publishing failed!");
-    #endif
-  }
-  
-  #endif
-}
-
 void w174PrintResults(unsigned long value)
 {
   #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
@@ -667,127 +528,8 @@ void w174DecodeResults(unsigned long value)
   bitSet(ventusReceivedBits, W174_RECEIVED_RAIN);
 }
 
-void w174PublishResults(unsigned long value)
-{ 
-  #if WITH_MQTT > 0
-  
-  // MQTT Feed
-  const char* sensorTopic = "weathersation/w174/out";
-
-  const int capacity = JSON_OBJECT_SIZE(100);
-  StaticJsonBuffer<capacity> jsonBuffer;
-  
-  // Create JsonObject
-  JsonObject &root = jsonBuffer.createObject();
-
-  // Add identification
-  JsonObject &id = root.createNestedObject("identification");
-  id["type"] = "sensor";
-  id["id"] = 2;
-  id["name"] = "W174";
-
-  // Add sensor datas
-  JsonObject &data = root.createNestedObject("data");
-  data["battery_low"] = (value >> 8 & 0b1);
-  data["rain"] = (value >> 16 & 0b1111111111111111) * 0.25; // bits 16..31
-
-  bitSet(ventusReceivedBits, W174_RECEIVED_RAIN);
-
-  char publishJson[256];
-  root.printTo(publishJson);
-  
-  #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
-  debug("MQTT topic: ");
-  debugln(sensorTopic);
-  debug("MQTT publish: ");
-  debugln(publishJson);
-  #endif
-  
-  if(client.publish(sensorTopic, (const char*)publishJson), true)
-  {
-    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
-    debugln("MQTT published.");
-    #endif
-  }
-  else
-  {
-    #if (WITH_DEBUG > 0 && WITH_DEBUG_MQTT > 0)
-    debugln("MQTT publishing failed!");
-    #endif
-  }
-
-  #endif
-}
-
-// Connect to WiFi access point.
-void wifiConnect()
-{
-  #if WITH_MQTT > 0
-  
-  debug("Connecting to WiFi ");
-  debug(WLAN_SSID);
-
-  byte retries = 20;
-     
-  WiFi.begin(WLAN_SSID, WLAN_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(500);
-    debug(".");
-  }
-  debugln();
-  debug("WiFi connected. ");
-  debug("IP address: ");
-  debugln(WiFi.localIP());
-
-  #endif  
-}
-
-// Function to connect and reconnect as necessary to the MQTT server.
-// Should be called in the loop function and it will take care if connecting.
-boolean mqttConnect()
-{
-  #if WITH_MQTT > 0
-
-  // Loop until we're reconnected
-  while (!client.connected())
-  {
-    #if (WITH_DEBUG_MQTT > 0)
-    debugln("Attempting MQTT connection...");
-    #endif
-    
-    // Connect with client ID
-    String clientId = "weatherstation";
-
-    if (client.connect(clientId.c_str()))
-    {
-      #if (WITH_DEBUG_MQTT > 0)
-      debugln("Broker connected.");
-      #endif
-    }
-    else
-    {
-      #if (WITH_DEBUG_MQTT > 0)
-      debug("Broker Server connection failed, rc=");
-      debugln(client.state());
-      debugln(" try again in 3 seconds");
-      #endif
-      // Wait 3 seconds before retrying
-      delay(3000);
-    }
-  }
-  
-  client.loop();
-  
-  #endif
-}
-
 void loop()
 {
-  #if WITH_MQTT > 0
-    mqttConnect();
-  #endif
-  
   if (w132fifoAvailable())
   {
     unsigned long dataReceived = w132fifoRead();
@@ -795,23 +537,14 @@ void loop()
     {
       #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
         w132PrintResults(dataReceived);
-      #endif  
-
-      #if WITH_MQTT > 0
-        w132PublishResults(dataReceived);  
-      #endif
-
-      #if (WITH_MQTT == 0 && (WITH_DEBUG == 0 || WITH_DEBUG_SENSORS == 0))
-        w132DecodeResults(dataReceived);  
-      #endif
-
-      #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
         debug("Received Bits: ");
         for (byte i = 0; i < 4; i++)
         {
           debug(ventusReceivedBits >> i & 0b1);
         }
         debugln();
+      #else 
+        w132DecodeResults(dataReceived);  
       #endif
 
       if (ventusReceivedBits == 1 || ventusReceivedBits >= 6)
@@ -821,15 +554,6 @@ void loop()
         detachInterrupt(digitalPinToInterrupt(W174_DATAPIN)); // Interrupts off while sleeping
 
         #if WITH_DEEPSLEEP > 0
-          // disconnect MQTT
-          debugln("disconnecting MQTT.");
-          client.disconnect();
-          delay(100);
-          
-          // disconnect WiFi
-          debugln("disconnecting WiFi.");
-          WiFi.disconnect();
-
           debug("deep sleeping ");
           debug(SLEEP_S);
           debugln(" seconds ...");
@@ -857,29 +581,20 @@ void loop()
     {
       #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
         w174PrintResults(dataReceived);
-      #endif  
-
-      #if WITH_MQTT > 0
-        w174PublishResults(dataReceived);  
-      #endif
-
-      #if (WITH_MQTT == 0 && (WITH_DEBUG == 0 || WITH_DEBUG_SENSORS == 0))
-        w174DecodeResults(dataReceived);  
-      #endif
-
-      if ((ventusReceivedBits >> W174_RECEIVED_RAIN & 0b1) == 1)
-      {
-        detachInterrupt(digitalPinToInterrupt(W174_DATAPIN)); // Interrupts off while sleeping
-      }
-
-      #if (WITH_DEBUG > 0 && WITH_DEBUG_SENSORS > 0)
         debug("Received Bits: ");
         for (byte i = 0; i < 4; i++)
         {
           debug(ventusReceivedBits >> i & 0b1);
         }
         debugln();
-      #endif
+      #else
+        w174DecodeResults(dataReceived);  
+      #endif  
+
+      if ((ventusReceivedBits >> W174_RECEIVED_RAIN & 0b1) == 1)
+      {
+        detachInterrupt(digitalPinToInterrupt(W174_DATAPIN)); // Interrupts off while sleeping
+      }
     }
   }
 }
